@@ -1,0 +1,334 @@
+// This is your Prisma schema file
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [postgis]
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum AccountStatus {
+  ACTIVE
+  FROZEN
+  SUSPENDED
+  BANNED
+}
+
+enum IntentRoom {
+  GREEN
+  RED
+}
+
+enum AdminRole {
+  ADMIN
+  SUPERADMIN
+}
+
+// ============================================
+// USER & AUTHENTICATION
+// ============================================
+
+model User {
+  id                  String        @id @default(uuid())
+  uuidHash            String        @unique @map("uuid_hash")
+  phoneNumber         String        @unique @map("phone_number")
+  
+  // Identity
+  realName            String?       @map("real_name")
+  redAlias            String?       @map("red_alias")
+  profilePhoto        String?       @map("profile_photo")
+  redBlurredPhoto     String?       @map("red_blurred_photo")
+  
+  // Astrology Data
+  birthDate           DateTime      @map("birth_date")
+  birthTime           String        @map("birth_time")
+  birthPlace          String        @map("birth_place")
+  birthLat            Float         @map("birth_lat")
+  birthLon            Float         @map("birth_lon")
+  
+  // Status & Security
+  currentRoom         IntentRoom    @default(GREEN) @map("current_room")
+  accountStatus       AccountStatus @default(ACTIVE) @map("account_status")
+  isVerified          Boolean       @default(false) @map("is_verified")
+  trustScore          Int           @default(80) @map("trust_score")
+  
+  // Location (PostGIS)
+  lastLocationUpdate  DateTime?     @map("last_location_update")
+  latitude            Float?
+  longitude           Float?
+  
+  // Metadata
+  createdAt           DateTime      @default(now()) @map("created_at")
+  lastActiveAt        DateTime?     @map("last_active_at")
+  
+  // Device Recovery
+  isInRecovery        Boolean       @default(false) @map("is_in_recovery")
+  recoveryExpiresAt   DateTime?     @map("recovery_expires_at")
+  
+  // Relations
+  matchesAsUserOne    Match[]       @relation("UserOne")
+  matchesAsUserTwo    Match[]       @relation("UserTwo")
+  sentMessages        Message[]     @relation("Sender")
+  starredProfiles     StarPool[]    @relation("Starrer")
+  starredBy           StarPool[]    @relation("Starred")
+  dailyLimit          DailyLimit?
+  reports             Report[]      @relation("Reporter")
+  reportedBy          Report[]      @relation("Reported")
+  subscriptions       Subscription[]
+  
+  @@index([uuidHash])
+  @@index([phoneNumber])
+  @@index([currentRoom, accountStatus])
+  @@map("users")
+}
+
+// ============================================
+// MATCHING SYSTEM
+// ============================================
+
+model Match {
+  id            String      @id @default(uuid())
+  userOneId     String      @map("user_one_id")
+  userTwoId     String      @map("user_two_id")
+  roomType      IntentRoom  @map("room_type")
+  
+  // Time Bank Logic
+  isValidated   Boolean     @default(false) @map("is_validated")
+  expiresAt     DateTime?   @map("expires_at")
+  
+  // Status
+  isFrozen      Boolean     @default(false) @map("is_frozen")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  deletedAt     DateTime?   @map("deleted_at")
+  
+  // Relations
+  userOne       User        @relation("UserOne", fields: [userOneId], references: [id], onDelete: Cascade)
+  userTwo       User        @relation("UserTwo", fields: [userTwoId], references: [id], onDelete: Cascade)
+  messages      Message[]
+  
+  @@unique([userOneId, userTwoId])
+  @@index([roomType, isValidated])
+  @@index([expiresAt])
+  @@map("matches")
+}
+
+model Message {
+  id                String    @id @default(uuid())
+  matchId           String    @map("match_id")
+  senderId          String    @map("sender_id")
+  content           String    @db.Text
+  
+  // Red Room Self-Destruct
+  selfDestructAt    DateTime? @map("self_destruct_at")
+  isDeleted         Boolean   @default(false) @map("is_deleted")
+  
+  // Metadata
+  sentAt            DateTime  @default(now()) @map("sent_at")
+  readAt            DateTime? @map("read_at")
+  
+  // Relations
+  match             Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  sender            User      @relation("Sender", fields: [senderId], references: [id])
+  
+  @@index([matchId, sentAt])
+  @@index([selfDestructAt])
+  @@map("messages")
+}
+
+model ShadowLog {
+  id              String    @id @default(uuid())
+  matchId         String    @map("match_id")
+  messageHash     String    @map("message_hash")
+  encryptedBlob   String    @map("encrypted_blob") @db.Text
+  userId          String    @map("user_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  expiresAt       DateTime  @map("expires_at")
+  
+  @@index([expiresAt])
+  @@map("shadow_logs")
+}
+
+// ============================================
+// SOCIAL FEATURES
+// ============================================
+
+model StarPool {
+  userId          String    @map("user_id")
+  starredUserId   String    @map("starred_user_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  expiresAt       DateTime  @map("expires_at")
+  
+  user            User      @relation("Starrer", fields: [userId], references: [id], onDelete: Cascade)
+  starredUser     User      @relation("Starred", fields: [starredUserId], references: [id], onDelete: Cascade)
+  
+  @@id([userId, starredUserId])
+  @@index([expiresAt])
+  @@map("star_pool")
+}
+
+model DailyLimit {
+  userId                  String    @id @map("user_id")
+  connectionRequestsUsed  Int       @default(0) @map("connection_requests_used")
+  profileViewsUsed        Int       @default(0) @map("profile_views_used")
+  resetAt                 DateTime  @map("reset_at")
+  
+  user                    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([resetAt])
+  @@map("daily_limits")
+}
+
+model Report {
+  id          String    @id @default(uuid())
+  reporterId  String    @map("reporter_id")
+  reportedId  String    @map("reported_id")
+  reason      String
+  details     String?   @db.Text
+  status      String    @default("pending")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  resolvedAt  DateTime? @map("resolved_at")
+  
+  reporter    User      @relation("Reporter", fields: [reporterId], references: [id])
+  reported    User      @relation("Reported", fields: [reportedId], references: [id])
+  
+  @@index([status])
+  @@map("reports")
+}
+
+// ============================================
+// ASTROLOGY
+// ============================================
+
+model SynastryCache {
+  id              String    @id @default(uuid())
+  userIdPair      String    @unique @map("user_id_pair")
+  birthDataHash   String    @map("birth_data_hash")
+  compatScore     Int       @map("compat_score")
+  icebreakerTips  String[]  @map("icebreaker_tips")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  expiresAt       DateTime  @map("expires_at")
+  
+  @@index([expiresAt])
+  @@map("synastry_cache")
+}
+
+// ============================================
+// MONETIZATION
+// ============================================
+
+model Subscription {
+  id              String    @id @default(uuid())
+  userId          String    @map("user_id")
+  tier            String    // cosmic_pass, trust_plus, founder_member
+  status          String    @default("active") // active, canceled, expired
+  startDate       DateTime  @default(now()) @map("start_date")
+  endDate         DateTime  @map("end_date")
+  autoRenew       Boolean   @default(true) @map("auto_renew")
+  
+  // Payment Provider Data
+  stripeSubId     String?   @map("stripe_sub_id")
+  iyzicoSubId     String?   @map("iyzico_sub_id")
+  
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId, status])
+  @@map("subscriptions")
+}
+
+model Purchase {
+  id              String    @id @default(uuid())
+  userId          String    @map("user_id")
+  productType     String    @map("product_type") // connection_pack, time_extender
+  quantity        Int       @default(1)
+  amount          Float
+  currency        String    @default("USD")
+  status          String    @default("completed")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  
+  @@index([userId])
+  @@map("purchases")
+}
+
+// ============================================
+// ADMIN & CONFIGURATION
+// ============================================
+
+model AdminUser {
+  id              String    @id @default(uuid())
+  email           String    @unique
+  passwordHash    String    @map("password_hash")
+  name            String
+  role            AdminRole @default(ADMIN)
+  isActive        Boolean   @default(true) @map("is_active")
+  twoFactorSecret String?   @map("two_factor_secret")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  lastLoginAt     DateTime? @map("last_login_at")
+  
+  auditLogs       AuditLog[]
+  
+  @@map("admin_users")
+}
+
+model AuditLog {
+  id          String    @id @default(uuid())
+  adminId     String    @map("admin_id")
+  action      String
+  details     Json
+  ipAddress   String?   @map("ip_address")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  
+  admin       AdminUser @relation(fields: [adminId], references: [id])
+  
+  @@index([adminId, createdAt])
+  @@map("audit_logs")
+}
+
+model SystemConfig {
+  id        String   @id @default("system")
+  
+  // API Keys (Encrypted)
+  facetecKey          String?  @map("facetec_key") @db.Text
+  googleMapsKey       String?  @map("google_maps_key") @db.Text
+  twilioSid           String?  @map("twilio_sid") @db.Text
+  twilioToken         String?  @map("twilio_token") @db.Text
+  twilioPhone         String?  @map("twilio_phone")
+  fcmServerKey        String?  @map("fcm_server_key") @db.Text
+  stripeSecretKey     String?  @map("stripe_secret_key") @db.Text
+  stripePublishableKey String? @map("stripe_publishable_key") @db.Text
+  s3AccessKey         String?  @map("s3_access_key") @db.Text
+  s3SecretKey         String?  @map("s3_secret_key") @db.Text
+  s3BucketName        String?  @map("s3_bucket_name")
+  
+  // Feature Toggles
+  faceVerificationEnabled  Boolean @default(true)  @map("face_verification_enabled")
+  paymentEnabled           Boolean @default(false) @map("payment_enabled")
+  v2HapticEnabled          Boolean @default(false) @map("v2_haptic_enabled")
+  astrologyEnabled         Boolean @default(true)  @map("astrology_enabled")
+  redRoomEnabled           Boolean @default(true)  @map("red_room_enabled")
+  
+  // App Limits
+  dailyConnectionLimit  Int @default(5)  @map("daily_connection_limit")
+  dailyViewLimit        Int @default(15) @map("daily_view_limit")
+  timeBankHours         Int @default(48) @map("time_bank_hours")
+  redRoomDestructHours  Int @default(5)  @map("red_room_destruct_hours")
+  starPoolExpiryDays    Int @default(7)  @map("star_pool_expiry_days")
+  maxDistanceKm         Int @default(50) @map("max_distance_km")
+  
+  // Provider Selection
+  faceVerificationProvider String @default("facetec") @map("face_verification_provider")
+  geocodingProvider        String @default("google")  @map("geocoding_provider")
+  smsProvider              String @default("twilio")  @map("sms_provider")
+  paymentProvider          String @default("stripe")  @map("payment_provider")
+  storageProvider          String @default("s3")      @map("storage_provider")
+  
+  updatedAt DateTime @updatedAt @map("updated_at")
+  
+  @@map("system_config")
+}

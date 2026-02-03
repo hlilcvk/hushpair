@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  backend:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      PORT: 3000
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+    networks:
+      - hushpair-network
+
+  postgres:
+    image: postgis/postgis:15-3.3
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-hushpair}
+      POSTGRES_USER: ${POSTGRES_USER:-hushpair}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - hushpair-network
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    networks:
+      - hushpair-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  hushpair-network:
+    driver: bridge
